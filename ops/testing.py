@@ -17,6 +17,7 @@
 import datetime
 import fnmatch
 import inspect
+import os
 import pathlib
 import random
 import tempfile
@@ -1006,6 +1007,8 @@ class _TestingModelBackend:
         self.app_name = self.unit_name.split('/')[0]
         self.model_name = None
         self.model_uuid = 'f2c1b2a6-e006-11eb-ba80-0242ac130004'
+
+        self._harness_tmp_dir = tempfile.TemporaryDirectory(prefix='ops-harness')
         self._calls = []
         self._meta = meta
         self._relation_ids_map = {}  # relation name to [relation_ids,...]
@@ -1027,6 +1030,7 @@ class _TestingModelBackend:
         # <ID1>: device id that is key for given storage_name
         # Initialize the _storage_list with values present on metadata.yaml
         self._storage_list = {k: {} for k in self._meta.storages}
+
         self._storage_detached = {k: set() for k in self._meta.storages}
         self._storage_id_counter = 0
         # {socket_path : _TestingPebbleClient}
@@ -1149,6 +1153,8 @@ class _TestingModelBackend:
                 'ERROR invalid value "{}/{}" for option -s: storage not found'.format(name, index))
 
     def storage_add(self, name: str, count: int = 1):
+        storage_dir = os.path.join(self._harness_tmp_dir.name, name, index)
+
         if name not in self._storage_list:
             self._storage_list[name] = {}
         result = []
@@ -1156,7 +1162,7 @@ class _TestingModelBackend:
             index = self._storage_id_counter
             self._storage_id_counter += 1
             self._storage_list[name][index] = {
-                "location": "/{}/{}".format(name, index)
+                "location": storage_dir,
             }
             result.append(index)
         return result
@@ -1585,6 +1591,95 @@ class NonAbsolutePathError(Exception):
     relative path.
     """
 
+class _MockStorage:
+    def __init__(self, location, src):
+        self._src = src
+        self._location = location
+
+    def contains(self, path):
+        return path.startswith(self._location)
+
+    def srcpath(self, path):
+        suffix = path[len(self._location):]
+        if suffix[0] == '/':
+            suffix = suffix[1:]
+        return os.path.join(self._src, suffix)
+
+    def create_dir(self, path: str, make_parents: bool = False, **kwargs) -> '_Directory':
+        assert(self.contains(path))
+        srcpath = self.srcpath(path)
+
+        dirname = os.path.dirname(srcpath)
+        if not os.path.exists(dirname):
+            if not make_parents:
+                raise RuntimeError('no such directory {}'.format(dirname))
+            os.makedirs(dirname)
+        os.makedirs(srcpath)
+        return _Directory(self, path, **kwargs)
+
+    def create_file(
+            self,
+            path: str,
+            data: typing.Union[bytes, str, typing.BinaryIO, typing.TextIO],
+            encoding: typing.Optional[str] = 'utf-8',
+            make_dirs: bool = False,
+            **kwargs
+    ) -> '_File':
+        assert(self.contains(path))
+        srcpath = self.srcpath(path)
+
+        dirname = os.path.dirname(srcpath)
+        if not os.path.exists(dirname):
+            if not make_dirs:
+                raise RuntimeError('no such directory {}'.format(dirname))
+            os.makedirs(dirname)
+
+        if not isinstance(data, bytes):
+            data = data.encode(encoding=encoding)
+
+        with open(srcpath, 'wb') as f:
+            f.write(data)
+
+        return _File(path, data, encoding=encoding, **kwargs)
+
+    def list_dir(self, path) -> typing.List['_File']:
+        assert(self.contains(path))
+        srcpath = self.srcpath(path)
+
+        results = []
+        for fname in os.listdir(srcpath):
+            fpath = os.path.join(srcpath, fname)
+            mountpath = os.path.join(path, fname)
+            if os.is_dir(fpath):
+                results.append(_DIRECTORY(mountpath))
+            elif os.is_file(fpath):
+                with open(fpath, 'wb') as f:
+                    results.append(_FILE(mountpath, f.read()))
+            else:
+                raise 'unsupported fs thing at path {}'.format(fpath)
+        return results
+
+    def open(
+            self,
+            path: typing.Union[str, pathlib.PurePosixPath],
+            encoding: typing.Optional[str] = 'utf-8',
+    ) -> typing.Union[typing.BinaryIO, typing.TextIO]:
+        assert(self.contains(path))
+        raise 'not implemented'
+
+    def get_path(self, path: typing.Union[str, pathlib.PurePosixPath]) -> typing.Union['_Directory', '_File']:
+        assert(self.contains(path))
+        srcpath = self.srcpath(path)
+        if os.path.is_dir(srcpath):
+            return _DIRECTORY(path)
+        with open(srcpath, 'wb') as f:
+            return _FILE(path, f.read())
+
+    def delete_path(self, path: typing.Union[str, pathlib.PurePosixPath]) -> None:
+        assert(self.contains(path))
+        srcpath = self.srcpath(path)
+        if os.path.exists(srcpath):
+            os.remove(srcpath)
 
 class _MockFilesystem:
     r"""An in-memory mock of a pebble-controlled container's filesystem.
@@ -1595,10 +1690,16 @@ class _MockFilesystem:
 
     def __init__(self):
         self.root = _Directory(pathlib.PurePosixPath('/'))
+        self._mounts = []
+    def add_mount(self, mount_path, backing_src_path):
+        self._mounts.append(_MockStorage(mount_path, backing_src_path))
 
     def create_dir(self, path: str, make_parents: bool = False, **kwargs) -> '_Directory':
         if not path.startswith('/'):
             raise NonAbsolutePathError(path)
+        for mount in self._mounts:
+            if mount.contains(path):
+                return mount.create_dir(path, make_parents, **kwargs)
         current_dir = self.root
         tokens = pathlib.PurePosixPath(path).parts[1:]
         for token in tokens[:-1]:
@@ -1640,6 +1741,9 @@ class _MockFilesystem:
     ) -> '_File':
         if not path.startswith('/'):
             raise NonAbsolutePathError(path)
+        for mount in self._mounts:
+            if mount.contains(path):
+                return mount.create_file(path, data, encoding, make_dirs, **kwargs)
         path_obj = pathlib.PurePosixPath(path)
         try:
             dir_ = self.get_path(path_obj.parent)
@@ -1659,6 +1763,9 @@ class _MockFilesystem:
         return dir_.create_file(path_obj.name, data, encoding=encoding, **kwargs)
 
     def list_dir(self, path) -> typing.List['_File']:
+        for mount in self._mounts:
+            if mount.contains(path):
+                return mount.list_dir(path)
         current_dir = self.root
         tokens = pathlib.PurePosixPath(path).parts[1:]
         for token in tokens:
@@ -1679,6 +1786,9 @@ class _MockFilesystem:
             path: typing.Union[str, pathlib.PurePosixPath],
             encoding: typing.Optional[str] = 'utf-8',
     ) -> typing.Union[typing.BinaryIO, typing.TextIO]:
+        for mount in self._mounts:
+            if mount.contains(path):
+                return mount.open(path, encoding)
         path = pathlib.PurePosixPath(path)
         file = self.get_path(path)  # warning: no check re: directories
         if isinstance(file, _Directory):
@@ -1687,6 +1797,9 @@ class _MockFilesystem:
 
     def get_path(self, path: typing.Union[str, pathlib.PurePosixPath]) \
             -> typing.Union['_Directory', '_File']:
+        for mount in self._mounts:
+            if mount.contains(path):
+                return mount.get_path(path)
         path = pathlib.PurePosixPath(path)
         tokens = path.parts[1:]
         current_object = self.root
@@ -1699,6 +1812,9 @@ class _MockFilesystem:
         return current_object
 
     def delete_path(self, path: typing.Union[str, pathlib.PurePosixPath]) -> None:
+        for mount in self._mounts:
+            if mount.contains(path):
+                return mount.delete_path(path)
         path = pathlib.PurePosixPath(path)
         parent_dir = self.get_path(path.parent)
         del parent_dir[path.name]

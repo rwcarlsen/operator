@@ -3320,6 +3320,16 @@ class TestMockFilesystem(unittest.TestCase):
     def setUp(self):
         self.fs = _MockFilesystem()
 
+    def test_storage_mount(self):
+        tmpdir = tempfile.TemporaryDirectory()
+        self.fs.add_mount('/foo', tmpdir.name)
+        self.fs.create_file('/foo/bar/baz.txt', 'quux', make_dirs=True)
+
+        tmppath = os.path.join(tmpdir.name, 'bar/baz.txt')
+        self.assertTrue(os.path.exists(tmppath))
+        with open(tmppath) as f:
+            self.assertEqual(f.read(), 'quux')
+
     def test_listdir_root_on_empty_os(self):
         self.assertEqual(self.fs.list_dir('/'), [])
 
