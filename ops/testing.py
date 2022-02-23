@@ -1137,6 +1137,7 @@ class _TestingModelBackend:
             self._unit_status = {'status': status, 'message': message}
 
     def storage_list(self, name):
+        print('listing storage', name)
         return list(index for index in self._storage_list[name]
                     if self._storage_is_attached(name, index))
 
@@ -1223,11 +1224,17 @@ class _TestingModelBackend:
     def juju_log(self, level, msg):
         raise NotImplementedError(self.juju_log)
 
-    def get_pebble(self, socket_path: str):
+    def get_pebble(self, container: str, socket_path: str):
         client = self._pebble_clients.get(socket_path, None)
         if client is None:
             client = _TestingPebbleClient(self)
             self._pebble_clients[socket_path] = client
+            #import pdb; pdb.set_trace()
+            if container is not None:
+                for mountname, mount in self._meta.containers[container].mounts.items():
+                    for store in self._storage_list[mount.storage]:
+                        print('MOUNT:', store.location, '--->', mount.location)
+                        client._fs.add_mount(mount.location, store.location)
         return client
 
     def planned_units(self):
@@ -1266,8 +1273,7 @@ class _TestingPebbleClient:
     def __init__(self, backend: _TestingModelBackend):
         self._backend = _TestingModelBackend
         self._layers = {}
-        # Has a service been started/stopped?
-        self._service_status = {}
+
         self._fs = _MockFilesystem()
 
     def get_system_info(self) -> pebble.SystemInfo:

@@ -2536,7 +2536,7 @@ class TestTestingModelBackend(unittest.TestCase):
         self.addCleanup(harness.cleanup)
         backend = harness._backend
 
-        client = backend.get_pebble('/custom/socket/path')
+        client = backend.get_pebble('fooname', '/custom/socket/path')
         self.assertIsInstance(client, _TestingPebbleClient)
 
 
@@ -2548,7 +2548,29 @@ class _TestingPebbleClientMixin:
         self.addCleanup(harness.cleanup)
         backend = harness._backend
 
-        return backend.get_pebble('/custom/socket/path')
+        return backend.get_pebble(None, '/custom/socket/path')
+
+    def get_testing_clients(self):
+        harness = Harness(CharmBase, meta='''
+            name: test-app2
+            containers:
+                c1:
+                    mounts:
+                        - storage: store1
+                          location: /mounts/store1
+                c2:
+                    mounts:
+                        - storage: store2
+                          location: /store2
+            storage:
+                store1:
+                    type: filesystem
+                store2:
+                    type: filesystem
+            ''')
+        self.addCleanup(harness.cleanup)
+        backend = harness._backend
+        return backend.get_pebble('c1', '/custom/socket/path1'), backend.get_pebble('c2', '/custom/socket/path2'), harness
 
 
 class TestTestingPebbleClient(unittest.TestCase, _TestingPebbleClientMixin):
@@ -3521,6 +3543,15 @@ class TestPebbleStorageAPIsUsingMocks(
         self.client = self.get_testing_client()
         if self.prefix:
             self.client.make_dir(self.prefix, make_parents=True)
+
+    def test_push_to_storage_mount(self):
+        c1, c2, harness = self.get_testing_clients()
+        harness.begin()
+        for entry in harness.model.storages:
+            print(entry)
+            for store in harness.model.storages[entry]:
+                print(store)
+        self.assertTrue(False)
 
     def test_push_with_ownership(self):
         # Note: To simplify implementation, ownership is simply stored as-is with no verification.
