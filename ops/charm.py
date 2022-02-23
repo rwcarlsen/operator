@@ -966,7 +966,6 @@ class ContainerMeta:
         under each key.
         """
         for mount in mounts:
-            print('populating mount', mount)
             storage = mount.get("storage", "")
             mount = mount.get("location", "")
 

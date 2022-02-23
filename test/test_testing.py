@@ -2536,7 +2536,7 @@ class TestTestingModelBackend(unittest.TestCase):
         self.addCleanup(harness.cleanup)
         backend = harness._backend
 
-        client = backend.get_pebble('fooname', '/custom/socket/path')
+        client = backend.get_pebble(None, '/custom/socket/path')
         self.assertIsInstance(client, _TestingPebbleClient)
 
 
@@ -2549,29 +2549,6 @@ class _TestingPebbleClientMixin:
         backend = harness._backend
 
         return backend.get_pebble(None, '/custom/socket/path')
-
-    def get_testing_clients(self):
-        harness = Harness(CharmBase, meta='''
-            name: test-app2
-            containers:
-                c1:
-                    mounts:
-                        - storage: store1
-                          location: /mounts/store1
-                c2:
-                    mounts:
-                        - storage: store2
-                          location: /store2
-            storage:
-                store1:
-                    type: filesystem
-                store2:
-                    type: filesystem
-            ''')
-        self.addCleanup(harness.cleanup)
-        backend = harness._backend
-        return backend.get_pebble('c1', '/custom/socket/path1'), backend.get_pebble('c2', '/custom/socket/path2'), harness
-
 
 class TestTestingPebbleClient(unittest.TestCase, _TestingPebbleClientMixin):
 
@@ -3545,13 +3522,36 @@ class TestPebbleStorageAPIsUsingMocks(
             self.client.make_dir(self.prefix, make_parents=True)
 
     def test_push_to_storage_mount(self):
-        c1, c2, harness = self.get_testing_clients()
+        harness = Harness(CharmBase, meta='''
+            name: test-app
+            containers:
+                c1:
+                    mounts:
+                        - storage: store1
+                          location: /mounts/store1
+                c2:
+                    mounts:
+                        - storage: store2
+                          location: /store2
+            storage:
+                store1:
+                    type: filesystem
+                store2:
+                    type: filesystem
+            ''')
+        self.addCleanup(harness.cleanup)
+
+        store_id = harness.add_storage('store1')[0]
+        harness.attach_storage(store_id)
+
         harness.begin()
-        for entry in harness.model.storages:
-            print(entry)
-            for store in harness.model.storages[entry]:
-                print(store)
-        self.assertTrue(False)
+        c1 = harness.model.unit.get_container('c1')
+        c2 = harness.model.unit.get_container('c2')
+
+        c1.push('/mounts/store1/foo.txt', '42')
+        fpath = os.path.join(harness.model.storages['store1'][0].location, 'foo.txt')
+        with open(fpath) as f:
+            self.assertEqual('42', f.read())
 
     def test_push_with_ownership(self):
         # Note: To simplify implementation, ownership is simply stored as-is with no verification.
