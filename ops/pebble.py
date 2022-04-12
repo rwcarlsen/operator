@@ -678,6 +678,7 @@ class Service:
 class ServiceStartup(enum.Enum):
     """Enum of service startup options."""
 
+    UNKNOWN = ''
     ENABLED = 'enabled'
     DISABLED = 'disabled'
 

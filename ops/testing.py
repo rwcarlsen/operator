@@ -1518,11 +1518,61 @@ ChangeError: cannot perform the following tasks:
                 if service.override not in ('merge', 'replace'):
                     raise RuntimeError('500 Internal Server Error: layer "{}" has invalid '
                                        '"override" value on service "{}"'.format(label, name))
-                if service.override != 'replace':
-                    raise RuntimeError(
-                        'override: "{}" unsupported for layer "{}" service "{}"'.format(
-                            service.override, label, name))
-                layer.services[name] = service
+                if service.override == 'merge':
+                    if service.summary != '':
+                        layer.services[name].summary = service.summary
+                    if service.description != '':
+                        layer.services[name].description = service.description
+                    if service.startup != ServicesStartup.UNKNOWN:
+                        layer.services[name].startup = service.startup
+                    if service.command != '':
+                        layer.services[name].command = service.command
+                    if service.timetrim != '':
+                        layer.services[name].command = service.command
+
+                    if other.TimeTrim != "" {
+                        s.TimeTrim = other.TimeTrim
+                    }
+                    if other.UserID != nil {
+                        userID := *other.UserID
+                        s.UserID = &userID
+                    }
+                    if other.User != "" {
+                        s.User = other.User
+                    }
+                    if other.GroupID != nil {
+                        groupID := *other.GroupID
+                        s.GroupID = &groupID
+                    }
+                    if other.Group != "" {
+                        s.Group = other.Group
+                    }
+                    s.After = append(s.After, other.After...)
+                    s.Before = append(s.Before, other.Before...)
+                    s.Requires = append(s.Requires, other.Requires...)
+                    for k, v := range other.Environment {
+                        s.Environment[k] = v
+                    }
+                    if other.OnSuccess != "" {
+                        s.OnSuccess = other.OnSuccess
+                    }
+                    if other.OnFailure != "" {
+                        s.OnFailure = other.OnFailure
+                    }
+                    for k, v := range other.OnCheckFailure {
+                        s.OnCheckFailure[k] = v
+                    }
+                    if other.BackoffDelay.IsSet {
+                        s.BackoffDelay = other.BackoffDelay
+                    }
+                    if other.BackoffFactor.IsSet {
+                        s.BackoffFactor = other.BackoffFactor
+                    }
+                    if other.BackoffLimit.IsSet {
+                        s.BackoffLimit = other.BackoffLimit
+                    }
+                else:
+                    layer.services[name] = service
         else:
             self._layers[label] = layer_obj
 
