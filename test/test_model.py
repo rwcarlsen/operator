@@ -932,6 +932,9 @@ containers:
         self.container.replan()
         self.assertEqual(self.pebble.requests, [('replan',)])
 
+    def test_can_connect_errors(self):
+        self.container.can_connect()
+
     def test_get_system_info(self):
         self.container.can_connect()
         self.assertEqual(self.pebble.requests, [('get_system_info',)])

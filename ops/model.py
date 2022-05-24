@@ -1151,12 +1151,12 @@ class Container:
         except FileNotFoundError as e:
             # In some cases, charm authors can attempt to hit the Pebble API before it has had the
             # chance to create the UNIX socket in the shared volume.
-            logger.debug("Pebble API is not ready; UNIX socket not found:", str(e))
+            logger.debug("Pebble API is not ready; UNIX socket not found: %s", e)
             return False
         except pebble.APIError as e:
             # An API error is only raised when the Pebble API returns invalid JSON, or the response
             # cannot be read. Both of these are a likely indicator that something is wrong.
-            logger.warning("Pebble API is not ready; APIError: %s", str(e))
+            logger.warning("Pebble API is not ready; APIError: %s", e)
             return False
         return True
 
