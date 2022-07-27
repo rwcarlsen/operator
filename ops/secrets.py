@@ -69,15 +69,35 @@ class MyDbCharm(CharmBase):
     def __init__(self):
 
     def _on_foo_relation_created(self, event):
+        # consider restricting secret creation to only the leader (at least initially - possibly
+        # relax later
         if self.is_leader():
             secret = event.add_secret('login-secret', 'user', 'u0', 'pass', 'p0') # grants entire application access
             # Or do we want an explicit grant?  I'm not sure I like the feel of requiring "secret.grant(event.app)"
+            secret = self.app.add_secret('foo', 'pass=bar')
+            secret.remove()
+            secret.remove_revision()
+
+            def remove_revision(self, revision=CURRENT):
+                ...
+
+            secret.grant(event.relation, event.unit, share_label='login-secret')
 
             # We could also auto-add the secret to the relation data here... convenient, but more magic...
+            secret.grant(event.app)
             event.relation.data[self.app]['login-secret'] = secret # auto-convert this to the secret uri/id behind the scenes
 
     def _on_foo_relation_joined(self, event):
         if self.is_leader():
+
+            rel = self.model.get_relation('foo')
+
+            # What about (future) relation-scoped-lifetime secrets?
+            self.app.add_secret(label, event.unit, 'password', 'foo')
+
+            # secrets are special - being explicit is a virtue
+            secret.grant(event.unit)
+
             label = self.event.unit.name + '-login-secret'
             secret = event.add_secret(label, 'user', self.event.unit.name, 'pass', self._genpass(event.unit)) # grants only the joining unit access
             event.relation.data[self.app][label] = secret # auto-convert this to the secret uri?
@@ -101,8 +121,16 @@ class MyDbCharm(CharmBase):
 
     # sent to creator/owner when all secret consuming/reading units have called secret-get --update,
     # allowing the charm to remove obsolete secret revisions.
-    def _on_secret_removeed(self, event):
-        event.secret.remove()
+    def _on_secret_remove(self, event):
+        Secret(..., revision=JUJU_SECRET_REVISION, ...)
+        event.secret.remove_revision()
+        # or
+        event.secret.prune() # have secret (prune) pointed implicitly with the removable revision?
+        # or be super explicit
+        event.secret.remove_revision(event.secret_revision)
+
+        # what does this do now?
+        print(event.secret.revision())
 
     def _regen_secret(self, secret, ...):
         ...
