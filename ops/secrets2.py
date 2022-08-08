@@ -92,18 +92,22 @@ class MyDbCharm(CharmBase):
 
     def _on_foo_relation_created(self, event):
         if self.is_leader():
-            # create an remote-application access level secret
             label = 'foo-login'
             secret = self.app.add_secret(label, 'user', 'u0', 'pass', 'p0')
-            secret.grant(event.relation)
+
+            # grant entire remote app access
+            secret.grant(event.relation, set_key=label) # optionally auto-set relation data secret id field here
+            # or manually set via separate call:
             event.relation.data[self.app][label] = secret # auto-convert this to the secret uri/id behind the scenes
 
     def _on_foo_relation_joined(self, event):
         if self.is_leader():
-            # Or do we want an explicit grant?  I'm not sure I like the feel of requiring "secret.grant(event.app)"
-            label = 'foo-login-' + event.unit.name +
+            label = 'foo-login-' + event.unit.name
             secret = self.app.add_secret(label, 'user', 'u0', 'pass', 'p0')
-            secret.grant(event.relation, unit=event.unit)
+
+            # grant one remote unit access
+            secret.grant(event.relation, unit=event.unit, set_key=label) # optionally auto-set relation data secret id field here
+            # or manually set via separate call:
             event.relation.data[self.app][label] = secret # auto-convert this to the secret uri/id behind the scenes
 
     # sent to secret creator/owner when the secret is due to be updated/rotated.
@@ -117,23 +121,21 @@ class MyDbCharm(CharmBase):
 
     # sent to secret creator/owner when secret is expired. Called repeatedly until the secret is removed.
     def _on_secret_expired(self, event):
-        s = event.secret
+        event.secret.prune()
         if s.label == 'foo-login':
             ...
-            event.secret.prune()
         elif s.label == 'bar-login':
             ...
 
     # sent to creator/owner when all secret consuming/reading units have called secret-get --update,
     # allowing the charm to remove obsolete secret revisions.
     def _on_secret_remove(self, event):
-        s = event.secret
+        event.secret.prune()
+        # TODO: what does this do now (after pruning)?
+        print(event.secret['user'])
+
         if s.label == 'foo-login':
             ...
-            event.secret.prune()
-
-            # TODO: what does this do now (after pruning)?
-            print(event.secret['user'])
         elif s.label == 'bar-login':
             ...
 
@@ -155,6 +157,7 @@ class MyOtherCharm(charm.CharmBase):
             self._on_bar_login_changed(secret)
         ...
 
+
     def _on_secret_changed(self, event):
         event.secret.update()
         if event.secret.label == 'my-foo-login-label':
@@ -169,21 +172,24 @@ class MyOtherCharm(charm.CharmBase):
         ...
 
 # consumer auto
-class SecretRelationWatcher:
+class RelationSecretWatcher:
     def __init__(self, charm, key, hook, is_initialized):
         self.charm = charm
         self._key = key
         self._hook = hook
         self._is_initialized = is_initialized
+        # We don't want to re-run secret hook tracking and init if we are already tracking the secret.
+        # Ideally we could know if/when the secret key was added to relation data and
+        # automatically handle/skip this without the user providing us a function to call.
+        # "secret-granted" event anyone?  Otherwise, user needs to use e.g. workload state or some
+        # manually persisted state to know if we need to reinit - this is what is_initialized needs
+        # to tell us.
     def _on_relation_changed(self, event):
         rel = event.relation
         label = self.charm._secret_label(rel.name, self._key)
         if self._key not in rel.data[rel.app]:
             return
         if self._is_initialized():
-            # Don't re-run secret hook tracking and init if we are already tracking the secret.
-            # Ideally we could know if/when the secret key was added to relation data and
-            # automatically handle/skip this without the user providing us a function to call.
             return
 
         sec_id = rel.data[rel.app][self._key]
@@ -199,13 +205,13 @@ class CharmBase:
 
     # is_initialized is a func that returns a bool - True if the secret has already been
     # initialized in the charm and is already being tracked.
-    def register_secret(relation_name, key, hook, is_initialized):
+    def observe_secret(relation_name, key, hook, is_initialized):
         # auto-construct label
         label = self._secret_label(relation_name, key)
         self._secret_hooks[label] = hook
         if len(self._secret_hooks) == 0:
             self.observe(self.on.secret_changed, self._on_secret_changed)
-        self.observe(self.on[relation_name].relation_changed, SecretRelationWatcher(self, key, hook, is_initialized))
+        self.observe(self.on[relation_name].relation_changed, RelationSecretWatcher(self, key, hook, is_initialized))
 
     def _on_secret_changed(self, event):
         event.secret.update()
@@ -213,7 +219,7 @@ class CharmBase:
 class MyOtherCharm(charm.CharmBase):
     def __init__(self):
         ...
-        self.app.register_secret('the-relation', 'foo-login', self._connect_db, self._db_connected)
+        self.app.observe_secret('the-relation', 'foo-login', self._connect_db, self._db_connected)
 
     def _db_connected(self):
         ...
