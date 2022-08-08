@@ -36,7 +36,7 @@ class Secret:
             raise RuntimeError("you can't do that")
 
         if len(keysvals) == 0:
-            self._model._backend.secret_get(self._uri, update=True)
+            self._model._backend.secret_get(self._uri, label=self.label, update=True)
             return
 
         self._model._backend.secret_update(self._uri, keysvals)
@@ -78,6 +78,11 @@ class Secret:
 class Application:
     def add_secret(self, label, expire=None, rotate=None, **keysvals):
         self._model._backend.secret_add(label, expire, rotate, keysvals)
+    def get_secret(self, sec_id, label):
+        ...
+        s = Secret(..., label=label, ...)
+        s.update()
+        return s
 
 class MyDbCharm(CharmBase):
     def __init__(self):
@@ -132,56 +137,87 @@ class MyDbCharm(CharmBase):
         elif s.label == 'bar-login':
             ...
 
-class Framework:
-    def __init__(self):
-        # {relation_name: [data_key, ...], ...}
-        self._secrets_map = {}
-
-        self._secret_hooks = {}
-
-    def observe_secret(self, relation_name, secret_label, hook):
-        if relation_name not in self._secret_hooks:
-            self._secret_hooks[relation_name] = {}
-        self._secret_hooks[relation_name][secret_label] = hook
-
-        self.observe(self.on.secret_changed, self._on_secret_changed)
-
-    def _on_secret_changed(self, event):
-        # determine and store the mapping between secret ids and
-        rel = event.secret.relation_name
-        if rel in self._secret_hooks:
-            label = event.secret.label
-            if label in self._secret_hooks[rel]:
-                hook = self._secret_hooks[rel][label]
-                hook(event)
-
+# consumer manual
 class MyOtherCharm(charm.CharmBase):
-    def __init__(self):
-        self._conn = self._connect_db()
-
-        self._secret_hooks = {}
-
-        # args are <relation-name>, <relation-data-key>, <hook-function>
-        self.framework.observe_secret('db-relation', 'foo-login', _on_foo_login_changed)
-
     def _on_foo_relation_changed(self, event):
-        self._ensure_connected()
-
-    def _on_foo_login_changed(self, event):
-        # TODO: should these be deferrable?
-        event.secret.update() # need to set secret to track latest revision
-        self._db_conn = self._connect_db(self, event.secret)
-
-    def _on_something_else(self, event):
-        if not self._ensure_connected():
-            event.defer()
-        ...
-
-    def _ensure_connected(self):
-        rel = self.model.get_relation('db-relation')
+        rel = event.relation
         if 'foo-login' in rel.data[rel.app] and self._db_conn is None:
             sec_id = rel.data[rel.app]['foo-login']
-            self._db_conn = self._connect_db(self.get_secret(sec_id))
+            secret = self.app.get_secret(sec_id, 'my-foo-login-label')
+            self._on_foo_login_changed(secret)
+        ...
+
+    def _on_baz_relation_changed(self, event):
+        rel = event.relation
+        if 'bar-login' in rel.data[rel.app] and not self._bar_initialized:
+            sec_id = rel.data[rel.app]['bar-login']
+            secret = self.app.get_secret(sec_id, 'my-bar-login-label')
+            self._on_bar_login_changed(secret)
+        ...
+
+    def _on_secret_changed(self, event):
+        event.secret.update()
+        if event.secret.label == 'my-foo-login-label':
+            self._on_foo_login_changed(event.secret)
+        elif event.secret.label == 'my-bar-login-label':
+            self._on_bar_login_changed(event.secret)
+        ...
+
+    def _on_foo_login_changed(self, secret):
+        secret.update() # need to set secret to track latest revision
+        self._db_conn = self._connect_db(secret)
+        ...
+
+# consumer auto
+class SecretRelationWatcher:
+    def __init__(self, charm, key, hook, is_initialized):
+        self.charm = charm
+        self._key = key
+        self._hook = hook
+        self._is_initialized = is_initialized
+    def _on_relation_changed(self, event):
+        rel = event.relation
+        label = self.charm._secret_label(rel.name, self._key)
+        if self._key not in rel.data[rel.app]:
+            return
+        if self._is_initialized():
+            # Don't re-run secret hook tracking and init if we are already tracking the secret.
+            # Ideally we could know if/when the secret key was added to relation data and
+            # automatically handle/skip this without the user providing us a function to call.
+            return
+
+        sec_id = rel.data[rel.app][self._key]
+        secret = self.charm.app.get_secret(sec_id, label)
+        self._hook(secret)
+class CharmBase:
+    def __init__(self):
+        self._secret_hooks = {}
+        self._secret_relations = set()
+
+    def _secret_label(self, relation_name, key):
+        return 'secret-{}-{}'.format(relation_name, key)
+
+    # is_initialized is a func that returns a bool - True if the secret has already been
+    # initialized in the charm and is already being tracked.
+    def register_secret(relation_name, key, hook, is_initialized):
+        # auto-construct label
+        label = self._secret_label(relation_name, key)
+        self._secret_hooks[label] = hook
+        if len(self._secret_hooks) == 0:
+            self.observe(self.on.secret_changed, self._on_secret_changed)
+        self.observe(self.on[relation_name].relation_changed, SecretRelationWatcher(self, key, hook, is_initialized))
+
+    def _on_secret_changed(self, event):
+        event.secret.update()
+        self._secret_hooks[event.secret.label](event.secret)
+class MyOtherCharm(charm.CharmBase):
+    def __init__(self):
+        ...
+        self.app.register_secret('the-relation', 'foo-login', self._connect_db, self._db_connected)
+
+    def _db_connected(self):
+        ...
+        return connected
 
     def _connect_db(self, secret):
         ...
