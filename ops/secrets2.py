@@ -69,7 +69,11 @@ class Secret:
             raise RuntimeError("you can't do that")
         self._model._backend.secret_remove(self._uri)
 
-    def __getitem__(self, key):
+    def label(self, label):
+        """sets the this unit's label for the secret"""
+
+
+    def get(self, key):
         # Load this on-demand - we don't want juju to mark our unit as tracking this secret unless the
         # charm actually accesses/uses it.  Also maybe don't cache the actual secret - helps
         # avoid accidentally logging, serializing, etc.
@@ -85,25 +89,26 @@ class Application:
         return s
 
 class MyDbCharm(CharmBase):
-    def __init__(self):
-        # TODO: if we create a global secret, where does the app store/remember it?
-        secret = self.app.add_secret(...)
-        # ???
+    def _on_install
+        secret = self.app.add_secret('token', expiration=time, user='u0', pass='p0')
 
     def _on_foo_relation_created(self, event):
-        if self.is_leader():
-            label = 'foo-login'
-            secret = self.app.add_secret(label, 'user', 'u0', 'pass', 'p0')
+        if self.is_lpackagingeader():
+            label =
+            secret = self.app.add_secret('bar-token', user='u0', pass='p0')
 
             # grant entire remote app access
-            secret.grant(event.relation, set_key=label) # optionally auto-set relation data secret id field here
+            secret.grant(event.relation)
+            # if app specified is not the relation's remote app - what happens?
+            secret.grant(event.relation, scope=event.unit)
             # or manually set via separate call:
-            event.relation.data[self.app][label] = secret # auto-convert this to the secret uri/id behind the scenes
+            event.relation.data[self.app][key] = secret # auto-convert this to the secret uri/id behind the scenes
 
     def _on_foo_relation_joined(self, event):
         if self.is_leader():
-            label = 'foo-login-' + event.unit.name
-            secret = self.app.add_secret(label, 'user', 'u0', 'pass', 'p0')
+
+            secret = self.app.add_secret('foo-login-{}'.format(event.unit), user='u0', pass='p0')
+            secret = self.app.add_secret('bar-token-{}'.format(event.unit), user='u0', pass='p0')
 
             # grant one remote unit access
             secret.grant(event.relation, unit=event.unit, set_key=label) # optionally auto-set relation data secret id field here
@@ -113,19 +118,18 @@ class MyDbCharm(CharmBase):
     # sent to secret creator/owner when the secret is due to be updated/rotated.
     def _on_secret_rotate(self, event):
         s = event.secret
+        if s.label.startswith('foo'):
+
         if s.label == 'foo-login':
             ...
-            s.update('user', 'u1', 'pass', 'p1')
+            s.update(user='u1', pass='p1')
         elif s.label == 'bar-login':
             ...
 
     # sent to secret creator/owner when secret is expired. Called repeatedly until the secret is removed.
     def _on_secret_expired(self, event):
         event.secret.prune()
-        if s.label == 'foo-login':
-            ...
-        elif s.label == 'bar-login':
-            ...
+        ...
 
     # sent to creator/owner when all secret consuming/reading units have called secret-get --update,
     # allowing the charm to remove obsolete secret revisions.
@@ -140,35 +144,28 @@ class MyDbCharm(CharmBase):
             ...
 
 # consumer manual
-class MyOtherCharm(charm.CharmBase):
+class SecretConsumerCharm(charm.CharmBase):
+    def __init__(self):
+        self.framework.observe(self.on.foo_relation_changed, self._on_foo_relation_changed)
+        self.framework.observe(self.on.secret_changed, self._on_secret_changed)
+
     def _on_foo_relation_changed(self, event):
         rel = event.relation
-        if 'foo-login' in rel.data[rel.app] and self._db_conn is None:
-            sec_id = rel.data[rel.app]['foo-login']
-            secret = self.app.get_secret(sec_id, 'my-foo-login-label')
-            self._on_foo_login_changed(secret)
+        if 'token' in rel.data[rel.app] and self._db_conn is None:
+            sec_id = rel.data[rel.app]['token']
+            secret = self.app.get_secret(sec_id, 'db-token')
+            self._auth_changed(secret)
         ...
-
-    def _on_baz_relation_changed(self, event):
-        rel = event.relation
-        if 'bar-login' in rel.data[rel.app] and not self._bar_initialized:
-            sec_id = rel.data[rel.app]['bar-login']
-            secret = self.app.get_secret(sec_id, 'my-bar-login-label')
-            self._on_bar_login_changed(secret)
-        ...
-
 
     def _on_secret_changed(self, event):
         event.secret.update()
-        if event.secret.label == 'my-foo-login-label':
-            self._on_foo_login_changed(event.secret)
-        elif event.secret.label == 'my-bar-login-label':
-            self._on_bar_login_changed(event.secret)
-        ...
+        if event.secret.label == 'db-token':
+            self._auth_changed(event.secret)
+        elif event.secret.label == 'some-other-secret':
+            ...
 
-    def _on_foo_login_changed(self, secret):
-        secret.update() # need to set secret to track latest revision
-        self._db_conn = self._connect_db(secret)
+    def _auth_changed(self, secret):
+        self._db_conn = self._dial_db(secret.get('data'))
         ...
 
 # consumer auto
