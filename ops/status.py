@@ -28,16 +28,19 @@ class StatusPool:
     _priorities = {'unknown':1, 'active':4, 'blocked': 0, 'waiting': 3, 'maintenance': 2}
     _loglevels = {'unknown': 'warning', 'active': 'debug', 'blocked': 'error', 'waiting':
             'debug', 'maintenance':'debug'}
-    def __init__(self, charm, auto_commit=False, logger=None):
+    def __init__(self, charm, auto_commit=False, logger=None, allowed=None):
         self._statuses = {}
         self._order = {}
         self._charm = charm
         self._logger = logger
         self._next_order = 0
+        self._allowed = allowed
         if auto_commit:
-            charm.model.at_hook_exit(self._at_hook_exit)
+            charm.model.at_hook_exit(self.commit)
 
     def __setitem__(self, key, val):
+        if self._allowed is not None and key not in self._allowed:
+            raise RuntimeError('invalid status pool key {}'.format(key))
         if val is None:
             del self._statuses[key]
             return
@@ -49,9 +52,6 @@ class StatusPool:
             self._order[key] = self._next_order
 
         self._statuses[key] = val
-
-    def _at_hook_exit(self):
-        self.commit()
 
     def commit(self):
         if len(self._statuses) == 0:
