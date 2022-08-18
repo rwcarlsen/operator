@@ -8,14 +8,17 @@ jobs:
   framework-tests:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v2
       - uses: ./.github/workflows/framework-tests.yaml@main
   observability-charm-tests:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v2
       - uses: ./.github/workflows/observability-charm-tests.yaml@main
   hello-charm-tests:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v2
       - uses: ./.github/workflows/hello-charm-tests.yaml@main
   build-n-publish:
     name: Build and Publish to PyPI
