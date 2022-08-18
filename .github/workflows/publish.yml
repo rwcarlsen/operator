@@ -6,17 +6,11 @@ on:
 
 jobs:
   framework-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: ./.github/workflows/framework-tests.yaml
+    uses: ./.github/workflows/framework-tests.yaml
   observability-charm-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: ./.github/workflows/observability-charm-tests.yaml
+    uses: ./.github/workflows/observability-charm-tests.yaml
   hello-charm-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: ./.github/workflows/hello-charm-tests.yaml
+    uses: ./.github/workflows/hello-charm-tests.yaml
   build-n-publish:
     name: Build and Publish to PyPI
     runs-on: ubuntu-latest
