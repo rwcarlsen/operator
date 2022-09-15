@@ -168,46 +168,25 @@ class Model:
             # we own this secret
             meta = self._backend.secret_meta(specifier)[specifier]
             label = meta.get('label')
-            revision = meta.get('revision')
 
             # Note: we explicitly don't set the revision here in order to disallow pruning outside
             #  a secret-remove event context.
-            return Secret(self._backend, specifier, label=label,
-                          revision=revision, am_owner=True)
+            return Secret(self._backend, specifier, label=label, am_owner=True)
 
         # check if the specifier is a label for an owned secret
         for my_secret_id in my_secrets:
-            meta = self._backend.secret_meta(specifier)[my_secret_id]
+            meta = self._backend.secret_meta(my_secret_id)[my_secret_id]
             if meta.get('label') == specifier:
                 # Note: we explicitly don't set the revision here in order to disallow pruning outside
                 # of a secret-remove event context.
-                return Secret(self._backend, my_secret_id,
-                              revision=meta.get('revision'),
-                              label=specifier, am_owner=True)
+                return Secret(self._backend, my_secret_id, label=specifier, am_owner=True)
 
-        # We must not own this secret.
-        # The specifier could still be a label.
-        try:
-            #  this will raise an exception if we DO own the secret, (OwnershipError)
-            #  or if we do not have access (SecretNotGrantedError)
-            #  or if this secret id is invalid = does not identify a secret
-            #   juju (or the testing env) knows of (InvalidSecretIDError).
-            self._backend.secret_get(specifier)
-            secret_id = specifier
-
-        # we allow (SecretNotGrantedError, OwnershipError) to raise
-        except InvalidSecretIDError:
-            try:
-                secret_id = self._backend.secret_label_to_id(specifier)
-            except (ModelError, IndexError) as e2:
-                raise InvalidSecretIDError(
-                    "The provided specifier {!r} is not a "
-                    "known secret ID nor a known label.") from e2
-
-        # TODO: check that --metadata returns 'the currently tracked revision'
-        revision = self._backend.secret_meta(secret_id)[secret_id].get('revision')
-        return Secret(self._backend, secret_id,
-                      revision=revision, am_owner=False)
+        # We must not own this secret. The specifier could still be a label.
+        # TODO: if/when juju allows us to retrieve non-owned secrets by label, this code will need
+        # to be updated to something like what @pietropasotti did that I reverted.
+        sec_id = specifier
+        self._backend.secret_get(sec_id)
+        return Secret(self._backend, sec_id, am_owner=False)
 
     @property
     def unit(self) -> 'Unit':
@@ -408,7 +387,7 @@ class Application:
         sec_id = self._backend.secret_add(
             owner='application', content=content, description=description,
             expire=expire, rotate=rotate)
-        return Secret(self._backend, sec_id, am_owner=True, revision=0)
+        return Secret(self._backend, sec_id, am_owner=True)
 
     @property
     def status(self) -> 'StatusBase':
@@ -543,7 +522,7 @@ class Unit:
         sec_id = self._backend.secret_add(content=content,
                                           owner='unit', description=description,
                                           expire=expire, rotate=rotate)
-        return Secret(self._backend, sec_id, am_owner=True, revision=0)
+        return Secret(self._backend, sec_id, am_owner=True)
 
     def _invalidate(self):
         self._status = None
@@ -954,7 +933,7 @@ class Secret:
         return self._label
 
     @property
-    def revision(self) -> int:
+    def revision(self) -> Optional[int]:
         """The revision number for this secret."""
         return self._revision
 
@@ -1086,45 +1065,27 @@ class Secret:
 
         Examples:
             >>> def _on_update_status(self: ops.charm.CharmBase, _):
-            >>>     old_revision = self.model.get_secret('my_label')
-            >>>     new_revision = old_revision.update()
-            >>>     if new_revision != old_revision:
-            >>>         logger.info('updated to new revision!')
+            >>>     secret = self.model.get_secret('my_label') # (possibly) old revision
+            >>>     secret.update() # secret refers to new revision now
         """
         if self._am_owner:
             raise RuntimeError(
                 'cannot update secret {} which is owned by this unit - did you mean to call Secret.set?'.format(
                     self))
         self._backend.secret_get(self.id, update=True)
-        new_rev = self._backend.secret_meta(self.id)[self.id]['revision']
 
-        return Secret(backend=self._backend,
-                      id=self.id,
-                      label=self.label,
-                      revision=int(new_rev),
-                      am_owner=self._am_owner)
-
-    def get(self, key: str,
-            update: bool = False,
-            peek: bool = False) -> str:
+    def get(self, key: str) -> str:
         """Get the secret contents.
 
         Parameters
         ----------
             key: if is specified, only the value mapped to this key will be returned.
                 Otherwise, the full key=value secret contents dict will be returned.
-            update: returns the contents of the latest revision and starts tracking it.
-            peek: returns the contents of the latest revision. Unlike update,
-                it will not switch the secret to track the latest revision. I.e. the next
-                time you call get() -- without peek=True -- you will get the revision
-                you are currently tracking, even though a more recent one is available.
-                Useful if you want to "try out" the new secret revision before dropping
-                the old one.
         """
         if self._am_owner:
             raise OwnershipError(
                 'cannot get contents for secret {} which is owned by this unit'.format(self))
-        return self._backend.secret_get(self.id, key=key, update=update, peek=peek)
+        return self._backend.secret_get(self.id, key=key)
 
     def set_label(self, label: str):
         """Assign a label to this Secret.
@@ -1138,16 +1099,15 @@ class Secret:
 
         Passing `label=""` will remove the label.
         """
-
         # We provide this unified API instead of forcing the user to call different
         # methods depending on the ownership status.
         self._label = label
         if self._am_owner:
             # owners have to *set* a secret to change its label
-            return self._backend.secret_set(self.id, label=label)
+            self._backend.secret_set(self.id, label=label)
         else:
             # holders can set the label on *getting* it!
-            return self._backend.secret_get(self.id, label=label)
+            self._backend.secret_get(self.id, label=label)
 
 
 class Relation:
@@ -2597,54 +2557,19 @@ class _ModelBackend:
 
     def secret_get(self, secret_id: str, key: Optional[str] = None,
                    label: Optional[str] = None,
-                   update: bool = False,
                    peek: bool = False
                    ) -> Union[str, Dict[str, str]]:
         args = ['secret-get', secret_id]
         if label is not None:
             args += ['--label', label]
-        if key is not None:
-            args.append(key)
-        if update:
-            args.append('--update')
         if peek:
             args.append('--peek')
+        if key is not None:
+            args.append(key)
         return self._run(*args, return_output=True, use_json=key is None)
 
-    def secret_label_to_id(self, label: str) -> str:
-        return list(self._run(
-            'secret-get', '--label', label, '--metadata',
-            return_output=True, use_json=True).keys())[0]
-
-    def secret_id_to_label(self, secret_id: str) -> Optional[str]:
-        return self.secret_meta(secret_id)[secret_id].get('label')
-
-    def secret_meta(self, secret_id: str, fetch:bool = False, update: bool = False) -> Dict[str, Dict[str, str]]:
-        args = ['secret-get']
-
-        # FIXME: label may be used instead of ID to fetch the secret
-        #  in that case we can pass --label <label> instead of <secret_id>
-        #  but that means that we need to know what what we've been passed is
-        #  this might-a work, but is horrible. Find a better way.
-        def _is_label(s):
-            try:
-                return bool(self.secret_label_to_id(s))
-            except ModelError:
-                return False
-
-        if _is_label(secret_id):
-            args.extend(('--label', secret_id))
-        else:
-            args.append(secret_id)
-
-        args.append('--metadata')
-        if fetch:
-            args.append('--fetch')
-        if update:
-            args.append('--update')
-
-
-        return self._run(*args, return_output=True, use_json=True)
+    def secret_meta(self, secret_id: str) -> Dict[str, Dict[str, str]]:
+        return self._run('secret-get', '--metadata', secret_id, return_output=True, use_json=True)
 
     @staticmethod
     def _is_relation_not_found(model_error: Exception) -> bool:
