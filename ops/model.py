@@ -932,11 +932,6 @@ class Secret:
         """
         return self._label
 
-    @property
-    def revision(self) -> Optional[int]:
-        """The revision number for this secret."""
-        return self._revision
-
     def __eq__(self, other: Any):
         if not isinstance(other, Secret):
             return False
@@ -2558,7 +2553,7 @@ class _ModelBackend:
     def secret_get(self, secret_id: str, key: Optional[str] = None,
                    label: Optional[str] = None,
                    peek: bool = False
-                   ) -> Union[str, Dict[str, str]]:
+                   ) -> str:
         args = ['secret-get', secret_id]
         if label is not None:
             args += ['--label', label]
